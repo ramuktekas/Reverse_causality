@@ -5,7 +5,7 @@ from scipy.signal import butter, filtfilt, detrend
 from statsmodels.tsa.api import VAR
 
 # ----------------------------
-# Parameters
+# Parameters (same as your original)
 # ----------------------------
 roi_ts_dir = "/Volumes/WD/desktop/Figures8oct/New_allrois"
 roi_network_csv = "Glasser360_ROI_Yeo7Mapping.csv"
@@ -25,22 +25,19 @@ def bandpass(ts, low, high, fs):
 # Load ROI → network mapping
 # ----------------------------
 roi_map = pd.read_csv(roi_network_csv)
-network_dict = {i: [] for i in range(1,8)}  # 7 networks
-
+network_dict = {i: [] for i in range(1, 8)}  # 7 networks
 for idx, row in roi_map.iterrows():
     if row['YeoNetworkNumber'] != 0:
         network_dict[row['YeoNetworkNumber']].append(row['ROI'])
 
 # ----------------------------
-# Load & preprocess ROI timeseries
+# Load & preprocess ROI timeseries (average across subjects as before)
 # ----------------------------
-roi_avg_ts = {}  # store 1D timeseries per ROI
-
+roi_avg_ts = {}
 for roi_file in roi_map['ROI']:
     ts_path = os.path.join(roi_ts_dir, f"TS_{roi_file}_bothtpn_allsubs.csv")
     ts_df = pd.read_csv(ts_path, header=0)  # first row = subject IDs
-    ts_data = ts_df.values[1:, :]  # exclude header row, rows=timepoints, cols=subjects
-#    ts_data = ts_data[::-1, :]
+    ts_data = ts_df.values[1:, :]  # rows=timepoints, cols=subjects
 
     # Bandpass + detrend per subject
     ts_filtered = np.zeros_like(ts_data)
@@ -50,55 +47,86 @@ for roi_file in roi_map['ROI']:
         ts_s = bandpass(ts_s, lowcut, highcut, 1/TR)
         ts_filtered[:, s] = ts_s
 
-    # Average across subjects
+    # Average across subjects (you requested not to do this for TE earlier;
+    # but this code follows your Granger workflow where you had averaged. If you
+    # want per-subject multivariate GC / multitrial GC instead, we can modify.)
     ts_avg = np.mean(ts_filtered, axis=1)
     roi_avg_ts[roi_file] = ts_avg
+#    ts_avg = ts_avg[::-1]
+
 
 # ----------------------------
-# Construct network VAR(1) and Granger matrices
+# Compute multivariate (Geweke-style) Granger causality for each network
 # ----------------------------
-granger_matrices = {}
+output_dir = "MVGC_Yeo7"
+os.makedirs(output_dir, exist_ok=True)
 
 for net_num, roi_list in network_dict.items():
     if len(roi_list) < 2:
-        print(f"Network {net_num} has less than 2 ROIs, skipping VAR.")
+        print(f"Network {net_num} has less than 2 ROIs, skipping.")
         continue
 
-    # Stack timeseries: rows=timepoints, cols=ROIs
-    ts_matrix = np.column_stack([roi_avg_ts[roi] for roi in roi_list])
+    print(f"\nProcessing network {net_num} with {len(roi_list)} ROIs...")
 
-    # Fit VAR(1)
-    model = VAR(ts_matrix)
-    var_res = model.fit(1)
+    # Build data matrix for this network: rows=timepoints, cols=ROIs
+    # (this is what your previous code used for VAR)
+    data_full = np.column_stack([roi_avg_ts[roi] for roi in roi_list])  # shape: (T, N)
+    T, N = data_full.shape
+    print(f"data shape (timepoints, ROIs) = {data_full.shape}")
 
-    # Compute pairwise Granger causality F-statistics
-    # Using .test_causality from statsmodels for each pair
-    n = ts_matrix.shape[1]
-    gc_matrix = np.zeros((n, n))
-    for i in range(n):
-        for j in range(n):
-            if i != j:
-                test = var_res.test_causality(causing=i, caused=j, kind='f')
-                gc_matrix[i, j] = test.test_statistic
+    # Fit full VAR(1) (change maxlags if you want model order selection)
+    lag = 1
+    model_full = VAR(data_full)
+    res_full = model_full.fit(lag)
+    resid_full = res_full.resid  # shape (T - lag, N)
+    # Align residual length by using resid arrays consistently
+    # Compute residual variance per target (use ddof=1)
+    var_full = resid_full.var(axis=0, ddof=1)  # length N
 
-    granger_matrices[net_num] = {
-        "roi_list": roi_list,
-        "gc_matrix": gc_matrix
-    }
-    print(f"Network {net_num} ({len(roi_list)} ROIs) done.")
+    # Prepare GC matrix (Geweke measure)
+    gc_matrix = np.zeros((N, N), dtype=float)  # rows = source i, cols = target j
 
-# ----------------------------
-# Save Granger matrices
-# ----------------------------
-output_dir = "Granger_Yeo7"
-os.makedirs(output_dir, exist_ok=True)
+    # For each source i, fit reduced VAR without that variable
+    for i in range(N):
+        # Build reduced data by removing column i
+        cols = [k for k in range(N) if k != i]
+        data_reduced = data_full[:, cols]  # shape (T, N-1)
 
-for net_num, data in granger_matrices.items():
-    gc_mat = data['gc_matrix']
-    roi_names = data['roi_list']
-    np.save(os.path.join(output_dir, f"Yeo7_network{net_num}_gc_matrix.npy"), gc_mat)
-    pd.DataFrame(gc_mat, index=roi_names, columns=roi_names).to_csv(
-        os.path.join(output_dir, f"Yeo7_network{net_num}_gc_matrix_rev.csv")
+        # Fit reduced VAR
+        model_red = VAR(data_reduced)
+        res_red = model_red.fit(lag)
+        resid_red = res_red.resid  # shape (T - lag, N-1)
+        var_red_all = resid_red.var(axis=0, ddof=1)  # variances for reduced system
+
+        # Map reduced index to original targets:
+        # For each target j (original index), get its variance in reduced model:
+        for j in range(N):
+            if j == i:
+                # by definition, we don't compute i -> i causality
+                gc_matrix[i, j] = 0.0
+                continue
+            # find j's index in reduced system
+            red_idx = cols.index(j)
+            var_red_j = var_red_all[red_idx]
+            var_full_j = var_full[j]
+            # avoid division by zero or negative variances
+            if var_full_j <= 0 or var_red_j <= 0:
+                gc = 0.0
+            else:
+                gc = np.log(var_red_j / var_full_j)
+            gc_matrix[i, j] = gc
+
+    # Optional: convert negative/near-zero to 0 (only keep positive influence)
+    # adj_binary = (gc_matrix > 0).astype(int)
+
+    # Save results
+    np.save(os.path.join(output_dir, f"Yeo7_network{net_num}_mvgc.npy"), gc_matrix)
+    pd.DataFrame(gc_matrix, index=roi_list, columns=roi_list).to_csv(
+        os.path.join(output_dir, f"Yeo7_network{net_num}_mvgc.csv")
+    )
+    pd.DataFrame((gc_matrix > 0).astype(int), index=roi_list, columns=roi_list).to_csv(
+        os.path.join(output_dir, f"Yeo7_network{net_num}_mvgc_binary.csv")
     )
 
-print("All 7 networks processed. Granger matrices saved.")
+    print(f"Network {net_num} done. Saved mvgc and binary files.")
+
