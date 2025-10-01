@@ -2,12 +2,26 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy.stats import linregress
 
 # ----------------------------
 # Directories
 # ----------------------------
-forward_dir = "Granger_Yeo7"
-reverse_dir = "Granger_Yeo7_rev"
+forward_dir = "MV_Yeo7_acw"
+reverse_dir = "MV_Yeo7_acw"
+
+# ----------------------------
+# Yeo network names
+# ----------------------------
+yeo_names = {
+    1: "VIS",
+    2: "SOM",
+    3: "DA",
+    4: "VA",
+    5: "LIM",
+    6: "CON",
+    7: "DMN"
+}
 
 # ----------------------------
 # Functions for metrics
@@ -33,8 +47,8 @@ def compute_metrics(A, B):
 # ----------------------------
 metrics = []
 for net_num in range(1, 8):
-    fpath = os.path.join(forward_dir, f"Yeo7_network{net_num}_gc_matrix.npy")
-    rpath = os.path.join(reverse_dir, f"Yeo7_network{net_num}_gc_matrix_rev.npy")
+    fpath = os.path.join(forward_dir, f"acwmv_yeo7_network{net_num}.npy")
+    rpath = os.path.join(reverse_dir, f"acwmv_yeo7_network{net_num}_rev.npy")
     if not (os.path.exists(fpath) and os.path.exists(rpath)):
         print(f"Missing network {net_num}, skipping...")
         continue
@@ -55,50 +69,56 @@ df = pd.DataFrame(metrics)
 print(df)
 
 # ----------------------------
-# Define Yeo7 network names
+# Plot dcnorm vs dnorm (all points, one regression)
 # ----------------------------
-yeo7_names = {
-    1: "Visual",
-    2: "SomMot",
-    3: "DorsAttn",
-    4: "SalVentAttn",
-    5: "Limbic",
-    6: "Cont",
-    7: "DMN"
-}
+plt.figure(figsize=(10,8))
 
-# ----------------------------
-# Plot dcnorm vs dnorm
-# ----------------------------
-plt.figure(figsize=(7,6))
-for _, row in df.iterrows():
-    plt.scatter(row["dnorm"], row["dcnorm"],
-                label=yeo7_names.get(row["network"], f"Network {row['network']}"),
-                s=100)
-plt.xlabel("dnorm(A)")
-plt.ylabel("dcnorm(A)")
-plt.title("dcnorm vs dnorm (Yeo7)")
-plt.legend()
-plt.grid(True)
+x = df["dnorm"].values
+y = df["dcnorm"].values
+
+# scatter points with network names
+for i, row in df.iterrows():
+    name = yeo_names.get(row["network"], f"Network {row['network']}")
+    plt.scatter(row["dnorm"], row["dcnorm"], label=name, s=100)
+
+# linear regression across all points
+slope, intercept, r_value, p_value, std_err = linregress(x, y)
+x_fit = np.linspace(min(x)*0.9, max(x)*1.1, 100)
+y_fit = intercept + slope * x_fit
+plt.plot(x_fit, y_fit, color='black', linestyle='--', label=f"Fit: $R^2$={r_value**2:.2f}, p={p_value:.3f}")
+
+plt.xlabel("Deviation from normality (dnorm{A})", fontweight='bold')
+plt.ylabel("Non-reversibilty under time-reversal (dcnorm{A})", fontweight='bold')
+plt.title("Causal structure reversal under time-reversal of the 7 Yeo networks (Multivariate Granger sense)- Movie watching dACW", fontweight='bold',fontsize=9)
+plt.legend(fontsize=9)
+plt.grid(False)
 plt.tight_layout()
-plt.savefig("dev_norm_7yeonet.png")
+plt.savefig("acwmv_yeo7_reversal_Movie2.png",dpi=600)
 
 plt.show()
 
 # ----------------------------
-# Plot dcsym vs dsym
+# Plot dcsym vs dsym (all points, one regression)
 # ----------------------------
-plt.figure(figsize=(7,6))
-for _, row in df.iterrows():
-    plt.scatter(row["dsym"], row["dcsym"],
-                label=yeo7_names.get(row["network"], f"Network {row['network']}"),
-                s=100)
-plt.xlabel("dsym(A)")
-plt.ylabel("dcsym(A)")
-plt.title("dcsym vs dsym (Yeo7)")
-plt.legend()
-plt.grid(True)
-plt.tight_layout()
-plt.savefig("dev_sym_7yeonet.png")
+plt.figure(figsize=(10,8))
 
+x = df["dsym"].values
+y = df["dcsym"].values
+
+for i, row in df.iterrows():
+    name = yeo_names.get(row["network"], f"Network {row['network']}")
+    plt.scatter(row["dsym"], row["dcsym"], label=name, s=100)
+
+slope, intercept, r_value, p_value, std_err = linregress(x, y)
+x_fit = np.linspace(min(x)*0.9, max(x)*1.1, 100)
+y_fit = intercept + slope * x_fit
+plt.plot(x_fit, y_fit, color='black', linestyle='--', label=f"Fit: $R^2$={r_value**2:.2f}, p={p_value:.3f}")
+
+plt.xlabel("Deviation from symmetry (dsym{A})", fontweight='bold')
+plt.ylabel("Non-conservablity under time-reversal (dcsym{A})", fontweight='bold')
+plt.title("Causal structure conservation under time-reversal of the 7 Yeo networks (Multivariate Granger sense)-Movie watching dACW", fontweight='bold', fontsize=9)
+plt.legend(fontsize=9)
+plt.grid(False)
+plt.tight_layout()
+plt.savefig("acwmv_yeo7_conservation_Movie2.png",dpi=600)
 plt.show()
