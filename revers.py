@@ -42,20 +42,45 @@ def compute_metrics(A, B):
     dcnorm = frob_ratio(A - BT, A + BT)
     return dsym, dnorm, dcsym, dcnorm
 
+def rescale(matrix, s=0.8):
+    """
+    Rescale a square matrix by s / lambda_max to ensure spectral radius <= s.
+    
+    Parameters
+    ----------
+    matrix : np.ndarray
+        Square matrix to rescale.
+    s : float
+        Target spectral radius (0 < s < 1). Default is 0.8.
+    
+    Returns
+    -------
+    np.ndarray
+        Rescaled matrix.
+    """
+    eigvals = np.linalg.eigvals(matrix)
+    lam_max = np.max(np.abs(eigvals))
+    if lam_max == 0:
+        return matrix.copy()  # nothing to rescale
+    factor = s / lam_max
+    return matrix * factor
+
 # ----------------------------
 # Collect metrics for all 7 networks
 # ----------------------------
 metrics = []
 for net_num in range(1, 8):
-    fpath = os.path.join(forward_dir, f"acwmv_yeo7_network{net_num}.npy")
-    rpath = os.path.join(reverse_dir, f"acwmv_yeo7_network{net_num}_rev.npy")
+    fpath = os.path.join(forward_dir, f"mv_yeo7_network{net_num}.npy")
+    rpath = os.path.join(reverse_dir, f"mv_yeo7_network{net_num}_rev.npy")
     if not (os.path.exists(fpath) and os.path.exists(rpath)):
         print(f"Missing network {net_num}, skipping...")
         continue
 
     A = np.load(fpath)
+    A = rescale(A)
     B = np.load(rpath)
-
+    B = rescale(B)
+    
     dsym, dnorm, dcsym, dcnorm = compute_metrics(A, B)
     metrics.append({
         "network": net_num,
